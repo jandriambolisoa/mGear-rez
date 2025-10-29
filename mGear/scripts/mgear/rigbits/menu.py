@@ -29,9 +29,8 @@ def install():
         ("-----", None),
         ("Duplicate symmetrical", str_duplicateSym),
         ("-----", None),
-        ("RBF Manager", str_rbf_manager_ui),
-        ("RBF Manager2", str_rbf_manager2_ui),
-        ("SDK Manager (BETA)", str_SDK_manager_ui),
+        ("RBF Manager 2.1", str_rbf_manager2_ui),
+        ("SDK Manager", str_SDK_manager_ui),
         ("-----", None),
         ("Space Manager", str_space_manager),
         ("-----", None),
@@ -42,6 +41,7 @@ def install():
         ("Channel Wrangler", str_openChannelWrangler),
         ("-----", None),
         ("Eyelid Rigger 2.0", str_eye_rigger),
+        ("Facial Rigger 1.0 (Legacy)", str_facial_rigger),
         ("-----", None),
         ("Proxy Geo", str_proxyGeo, "mgear_proxyGeo_to_next.svg"),
         ("Proxy Slicer", str_proxySlicer),
@@ -183,11 +183,6 @@ from mgear import rigbits
 rigbits.duplicateSym()
 """
 
-str_rbf_manager_ui = """
-from mgear.rigbits import rbf_manager_ui
-rbf_manager_ui.show()
-"""
-
 str_rbf_manager2_ui = """
 from mgear.rigbits.rbf_manager2 import rbf_manager_ui
 rbf_manager_ui.show()
@@ -255,6 +250,10 @@ from mgear import rigbits
 rigbits.connectLocalTransform(None, 0, 0, 1)
 """
 
+str_facial_rigger = """
+from mgear.rigbits import facial_rigger
+facial_rigger.show()
+"""
 
 # eye rigger 2.0 str commands
 

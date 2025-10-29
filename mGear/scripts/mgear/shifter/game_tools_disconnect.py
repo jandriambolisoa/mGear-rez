@@ -95,9 +95,12 @@ def delete_rig_keep_joints(confirmPop=True):
         if button_pressed == QtWidgets.QMessageBox.Yes:
             confirm = True
 
+        else:
+            pm.displayInfo("Cancelled")
+            return
     else:
-        pm.displayInfo("Cancelled")
-        return
+        confirm = True
+
     if confirm:
         disconnect_joints()
         for rig_root in get_rig_root_from_set():
@@ -295,7 +298,6 @@ def get_connections(source=None, embed_info=False):
                 "string",
                 value=str(attrs_list_checked),
             )
-
     connections = {}
     connections["joints"] = []
     connections["attrs"] = []
@@ -303,6 +305,8 @@ def get_connections(source=None, embed_info=False):
     if not source:
         source = pm.selected()
     for jnt in source:
+        if isinstance(jnt, str):
+            jnt = pm.PyNode(jnt)
         leaf_jnt = None
         if not jnt.name().startswith(("blend_", "leaf_")):
             connections["joints"].append(jnt.name())

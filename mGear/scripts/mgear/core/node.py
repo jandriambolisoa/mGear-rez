@@ -31,6 +31,14 @@ def createMultMatrixNode(mA, mB, target=False, transform="srt"):
         pyNode: Newly created mGear_multMatrix node
 
     """
+
+    if isinstance(mA, str):
+        mA = pm.PyNode(mA)
+    if isinstance(mB, str):
+        mB = pm.PyNode(mB)
+    if isinstance(target, str):
+        target = pm.PyNode(target)
+
     node = pm.createNode("multMatrix")
     for m, mi in zip([mA, mB], ["matrixIn[0]", "matrixIn[1]"]):
         if isinstance(m, datatypes.Matrix):
@@ -385,6 +393,16 @@ def createCurveInfoNode(crv):
     return node
 
 
+def createAddDL():
+    # Maya 2026 changed and removed some node names
+    if pm.versions.current() >= 20260000:
+        node = pm.createNode("addDL")
+    else:
+        node = pm.createNode("addDoubleLinear")
+
+    return node
+
+
 # TODO: update using plusMinusAverage node
 def createAddNode(inputA, inputB):
     """Create and connect a addition node.
@@ -399,7 +417,7 @@ def createAddNode(inputA, inputB):
     >>> add_node = nod.createAddNode(self.roundness_att, .001)
 
     """
-    node = pm.createNode("addDoubleLinear")
+    node = createAddDL()
 
     if isinstance(inputA, string_types) or isinstance(inputA, pm.Attribute):
         pm.connectAttr(inputA, node + ".input1")
@@ -428,7 +446,7 @@ def createSubNode(inputA, inputB):
     >>> sub_nod = nod.createSubNode(self.roll_att, angle_outputs[i-1])
 
     """
-    node = pm.createNode("addDoubleLinear")
+    node = createAddDL()
 
     if isinstance(inputA, string_types) or isinstance(inputA, pm.Attribute):
         pm.connectAttr(inputA, node + ".input1")
@@ -713,7 +731,7 @@ def createAddNodeMulti(inputs=[]):
     outputs = [inputs[0]]
 
     for i, input in enumerate(inputs[1:]):
-        node_name = pm.createNode("addDoubleLinear")
+        node_name = createAddDL()
 
         if isinstance(outputs[-1], string_types) or isinstance(
             outputs[-1], pm.Attribute

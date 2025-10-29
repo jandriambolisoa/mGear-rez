@@ -112,7 +112,7 @@ def getComponentDirectories():
 def importComponentGuide(comp_type):
     """Import the Component guide"""
     dirs = getComponentDirectories()
-    defFmt = "mgear.core.shifter.component.{}.guide"
+    defFmt = "mgear.shifter.component.{}.guide"
     customFmt = "{}.guide"
 
     module = mgear.core.utils.importFromStandardOrCustomDirectories(
@@ -124,7 +124,7 @@ def importComponentGuide(comp_type):
 def importComponent(comp_type):
     """Import the Component"""
     dirs = getComponentDirectories()
-    defFmt = "mgear.core.shifter.component.{}"
+    defFmt = "mgear.shifter.component.{}"
     customFmt = "{}"
 
     module = mgear.core.utils.importFromStandardOrCustomDirectories(
@@ -145,8 +145,8 @@ def reloadComponents(*args):
         for com in compDir[x]:
             try:
                 if PY2:
-                    reload(importComponent(com))
-                    reload(importComponentGuide(com))
+                    reload(importComponent(com)) # type: ignore
+                    reload(importComponentGuide(com)) # type: ignore
                 else:
                     importlib.reload(importComponent(com))
                     importlib.reload(importComponentGuide(com))
@@ -184,8 +184,7 @@ class Rig(object):
 
         self.build_data = {}
 
-        self.component_finalize = False
-
+    @utils.one_undo
     def buildFromDict(self, conf_dict):
         log_window()
         startTime = datetime.datetime.now()
@@ -209,17 +208,20 @@ class Rig(object):
         self.build()
         self.from_dict_custom_step(conf_dict, pre=False)
         # Collect post-build data
-        build_data = self.collect_build_data()
+        if self.options["data_collector_embedded"] or self.options["data_collector"]:
+            build_data = self.collect_build_data()
+        else:
+            build_data = None
 
         endTime = datetime.datetime.now()
         finalTime = endTime - startTime
-        pm.flushUndo()
-        pm.displayInfo(
-            "Undo history have been flushed to avoid "
-            "possible crash after rig is build. \n"
-            "More info: "
-            "https://github.com/miquelcampos/mgear/issues/72"
-        )
+        # pm.flushUndo()
+        # pm.displayInfo(
+        #     "Undo history have been flushed to avoid "
+        #     "possible crash after rig is build. \n"
+        #     "More info: "
+        #     "https://github.com/miquelcampos/mgear/issues/72"
+        # )
         mgear.log(
             "\n"
             + "= SHIFTER BUILD RIG DONE {} [ {} ] {}".format(
@@ -229,6 +231,7 @@ class Rig(object):
 
         return build_data
 
+    @utils.one_undo
     def buildFromSelection(self):
         """Build the rig from selected guides."""
 
@@ -267,17 +270,20 @@ class Rig(object):
                 self.postCustomStep()
 
             # Collect post-build data
-            build_data = self.collect_build_data()
+            if self.options["data_collector_embedded"] or self.options["data_collector"]:
+                build_data = self.collect_build_data()
+            else:
+                build_data = None
 
             endTime = datetime.datetime.now()
             finalTime = endTime - startTime
-            pm.flushUndo()
-            pm.displayInfo(
-                "Undo history have been flushed to avoid "
-                "possible crash after rig is build. \n"
-                "More info: "
-                "https://github.com/miquelcampos/mgear/issues/72"
-            )
+            # pm.flushUndo()
+            # pm.displayInfo(
+            #     "Undo history have been flushed to avoid "
+            #     "possible crash after rig is build. \n"
+            #     "More info: "
+            #     "https://github.com/miquelcampos/mgear/issues/72"
+            # )
             mgear.log(
                 "\n"
                 + "= SHIFTER BUILD RIG DONE {} [ {} ] {}".format(
@@ -545,8 +551,6 @@ class Rig(object):
                     name + " : " + comp.fullName + " (" + comp.type + ")"
                 )
                 comp.stepMethods[i]()
-                if name == "Finalize":
-                    self.component_finalize = True
 
             if self.options["step"] >= 1 and i >= self.options["step"] - 1:
                 break
@@ -616,8 +620,8 @@ class Rig(object):
 
         # hide all DG nodes inputs in channel box -----------------------
         # only hides if components_finalize or All steps are done
-
-        if self.component_finalize:
+        # if not WIP mode we will hide all the inputs
+        if not self.options["mode"]:
             for c in self.model.listHistory(ac=True, f=True):
                 if c.type() != "transform":
                     c.isHistoricallyInteresting.set(False)
@@ -651,7 +655,27 @@ class Rig(object):
         Returns:
             dict: The collected data
         """
-        self.build_data["MainSettings"] = self.options
+        # print("self.guide.guide_template_dict>>>>>>>>>>>>>>>>>")
+        # print(self.guide.guide_template_dict["guide_root"]["param_values"])
+        # options in dictionary form
+        # self.options_dict = self.guide.guide_template_dict["guide_root"]["param_values"]
+        # print(self.options)
+        # print(self.guide.guide_template_dict["guide_root"]["param_values"])
+        # print(self.options)
+        self.build_data["MainSettings"] = self.guide.guide_template_dict["guide_root"]["param_values"]
+        self.build_data["MainSettings"]["size"] = self.options["size"]
+        # print(self.build_data["MainSettings"])
+
+        # replace the MVector with his value in a list
+        # keys_to_update = [
+        #     'L_RGB_fk', 'L_RGB_ik',
+        #     'R_RGB_fk', 'R_RGB_ik',
+        #     'C_RGB_fk', 'C_RGB_ik'
+        #     ]
+        # for key in keys_to_update:
+        #     self.build_data["MainSettings"][key] == self.guide.guide_template_dict["guide_root"]["param_values"][key]
+        # print(self.build_data["MainSettings"])
+        # self.build_data["MainSettings"] = self.guide.guide_template_dict["guide_root"]["param_values"]
         self.build_data["Components"] = []
         for c, comp in self.customStepDic["mgearRun"].components.items():
             self.build_data["Components"].append(comp.build_data)
@@ -661,7 +685,6 @@ class Rig(object):
             self.add_collected_data_to_root_jnt(root_jnt=root_jnt)
         if self.options["data_collector"]:
             self.data_collector_output(self.options["data_collector_path"])
-
         return self.build_data
 
     def data_collector_output(self, file_path=None):
@@ -675,7 +698,6 @@ class Rig(object):
                 guide.DATA_COLLECTOR_EXT
             )
             file_path = pm.fileDialog2(fileMode=0, fileFilter=ext_filter)[0]
-
         with open(file_path, "w") as f:
             f.write(json.dumps(self.build_data, indent=4))
             file_path = None

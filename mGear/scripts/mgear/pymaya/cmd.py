@@ -7,6 +7,8 @@ from maya.api import OpenMaya
 import functools
 import inspect
 import pprint
+from . import bind
+from .geometry import MeshEdge, MeshVertex, MeshFace, BindGeometry
 
 
 __all__ = []
@@ -150,19 +152,27 @@ __all__.append("confirmBox")
 
 
 def _obj_to_name(arg):
+    """Convert a Maya object to its name representation.
+
+    Recursively converts items in collections. For objects of type base.Geom,
+    it returns the result of `toStringList()`. For objects of type base.Base,
+    it returns the result of `name()`.
+
+    Args:
+        arg (any): The object to convert.
+
+    Returns:
+        any: The converted name, or a collection of converted names.
+    """
     if isinstance(arg, (list, set, tuple)):
         return arg.__class__([_obj_to_name(x) for x in arg])
     elif isinstance(arg, dict):
-        newdic = {}
-        for k, v in arg.items():
-            newdic[k] = _obj_to_name(v)
-        return newdic
+        return {k: _obj_to_name(v) for k, v in arg.items()}
     elif isinstance(arg, base.Geom):
         return arg.toStringList()
     elif isinstance(arg, base.Base):
         return arg.name()
-    else:
-        return arg
+    return arg
 
 
 def _dt_to_value(arg):
@@ -196,30 +206,42 @@ def _dt_to_value(arg):
 
 
 def _name_to_obj(arg, scope=SCOPE_NODE, known_node=None):
-    # lazy importing
-    from . import bind
+    """Convert a node name or collection of names to PyNode objects.
 
+    If the input is a collection (list, set, or tuple), the function applies
+    the conversion recursively. For a string input, it attempts to convert the
+    string to a PyNode. If the conversion fails, it returns the original string.
+
+    Args:
+        arg (any): The value to convert.
+        scope (int, optional): The scope identifier (SCOPE_NODE or SCOPE_ATTR).
+            Defaults to SCOPE_NODE.
+        known_node (str, optional): Known node name used in attribute scope.
+            Defaults to None.
+
+    Returns:
+        any: A PyNode object, a collection of PyNode objects, or the original value.
+    """
     if arg is None:
         return None
 
-    elif isinstance(arg, (list, set, tuple)):
+    if isinstance(arg, (list, set, tuple)):
         return arg.__class__(
             [_name_to_obj(x, scope=scope, known_node=known_node) for x in arg]
         )
 
-    elif isinstance(arg, str):
-        if scope == SCOPE_ATTR and known_node is not None:
-            try:
-                return bind.PyNode("{}.{}".format(known_node, arg))
-            except:
-                return arg
-        else:
-            try:
-                return bind.PyNode(arg)
-            except:
-                return arg
-    else:
-        return arg
+    if isinstance(arg, str):
+        node_name = (
+            "{}.{}".format(known_node, arg)
+            if scope == SCOPE_ATTR and known_node
+            else arg
+        )
+        try:
+            return bind.PyNode(node_name)
+        except Exception:
+            return arg
+
+    return arg
 
 
 def _pymaya_cmd_wrap(func, wrap_object=True, scope=SCOPE_NODE):
@@ -228,7 +250,25 @@ def _pymaya_cmd_wrap(func, wrap_object=True, scope=SCOPE_NODE):
         args = _obj_to_name(args)
         kwargs = _obj_to_name(kwargs)
 
-        res = func(*args, **kwargs)
+        try:
+            res = func(*args, **kwargs)
+        except Exception as e:
+            # Format the command for copy-paste debugging
+            args_repr = ", ".join(repr(arg) for arg in args)
+            kwargs_repr = ", ".join(
+                f"{key}={repr(value)}" for key, value in kwargs.items()
+            )
+            command_repr = (
+                f"{func.__module__}.{func.__name__}({args_repr}, {kwargs_repr})"
+            )
+
+            # Raise an error with detailed debugging information
+            raise RuntimeError(
+                f"Error occurred while calling wrapped function '{func.__module__}.{func.__name__}': {str(e)}\n"
+                f"Arguments: {args}\n"
+                f"Keyword Arguments: {kwargs}\n"
+                f"Command for debugging: {command_repr}"
+            ) from e
         # filter if the function should not return as list
         # Constraints
         if (
@@ -397,6 +437,213 @@ def listConnections(*args, sourceFirst=False, **kwargs):
     return _name_to_obj(res)
 
 
+def _listRelatives(
+    dag_path,
+    allDescendents=False,
+    children=False,
+    parent=False,
+    fullPath=True,
+    path=False,
+    shapes=False,
+    noIntermediate=False,
+    type=None,
+):
+    """Internal implementation of listRelatives using maya.api.OpenMaya.
+
+    This function implements the logic similar to cmds.listRelatives.
+
+    Args:
+        dag_path (str): Name of the DAG node.
+        allDescendents (bool): If True, recursively lists all descendants.
+        children (bool): If True, lists only immediate children.
+        parent (bool): If True, returns the parent of the node.
+        fullPath (bool): If True, returns full DAG paths.
+        path (bool): Alias for fullPath.
+        shapes (bool): If True, filters for shape nodes.
+        noIntermediate (bool): If True, excludes intermediate objects.
+        type (str): Filter nodes by this type (e.g., "mesh", "nurbsCurve").
+
+    Returns:
+        list: List of node names matching the criteria.
+    """
+    # If "path" flag is True, treat it as fullPath.
+    if path:
+        fullPath = True
+
+    # Default behavior is children if no traversal flag is set.
+    if not (parent or allDescendents or children):
+        children = True
+
+    sel_list = OpenMaya.MSelectionList()
+
+    if not isinstance(dag_path, str):
+        # dag_path_type = __builtins__["type"](dag_path)
+        # print("dag_path_type: {}".format(dag_path_type))
+        dag_path = dag_path.longName()
+    try:
+        sel_list.add(dag_path)
+    except RuntimeError:
+        OpenMaya.MGlobal.displayWarning(
+            "Node '{}' does not exist.".format(dag_path)
+        )
+        return []
+
+    try:
+        dag_path_obj = sel_list.getDagPath(0)
+    except Exception:
+        OpenMaya.MGlobal.displayWarning(
+            "Unable to get DAG path for '{}'.".format(dag_path)
+        )
+        return []
+
+    # Verify the node is a DAG node.
+    dag_node = dag_path_obj.node()
+    if not dag_node.hasFn(OpenMaya.MFn.kDagNode):
+        OpenMaya.MGlobal.displayWarning(
+            "'{}' is not a DAG node.".format(dag_path)
+        )
+        return []
+
+    dag_fn = OpenMaya.MFnDagNode(dag_path_obj)
+    result_nodes = []
+
+    # If parent flag is set, return parent (if any) and exit.
+    if parent:
+        # Check if the node is a MeshEdge, MeshVertex, or MeshFace.
+        bound_geometry = BindGeometry(dag_path, silent=True)
+        if isinstance(bound_geometry, (MeshEdge, MeshVertex, MeshFace)):
+            return _name_to_obj([bound_geometry.dagPath().fullPathName()])
+
+        if dag_fn.parentCount() > 0:
+            parent_obj = dag_fn.parent(0)
+            if not parent_obj.isNull():
+                parent_fn = OpenMaya.MFnDagNode(parent_obj)
+                node_name = (
+                    parent_fn.fullPathName() if fullPath else parent_fn.name()
+                )
+                if node_name:
+                    result_nodes.append(node_name)
+        return _name_to_obj(result_nodes)
+
+    def process_node(node_obj):
+        """Process a node and return its name if it passes filters.
+
+        Args:
+            node_obj (MObject): Maya node object.
+
+        Returns:
+            str or None: Node name if node passes filters, else None.
+        """
+        try:
+            node_fn = OpenMaya.MFnDagNode(node_obj)
+        except Exception:
+            return None
+
+        if shapes:
+            if not node_fn.object().hasFn(OpenMaya.MFn.kShape):
+                return None
+
+        if type is not None:
+            if node_fn.typeName != type:
+                return None
+
+        if noIntermediate and node_fn.isIntermediateObject:
+            return None
+
+        return node_fn.fullPathName() if fullPath else node_fn.name()
+
+    def traverse(node_fn):
+        """Recursively traverse children of a node.
+
+        Args:
+            node_fn (MFnDagNode): Function set for a DAG node.
+        """
+        for i in range(node_fn.childCount()):
+            child_obj = node_fn.child(i)
+            if not child_obj.isNull():
+                node_name = process_node(child_obj)
+                if node_name is not None:
+                    result_nodes.append(node_name)
+                traverse(OpenMaya.MFnDagNode(child_obj))
+
+    if allDescendents:
+        traverse(dag_fn)
+    else:
+        # Only immediate children.
+        for i in range(dag_fn.childCount()):
+            child_obj = dag_fn.child(i)
+            if not child_obj.isNull():
+                node_name = process_node(child_obj)
+                if node_name is not None:
+                    result_nodes.append(node_name)
+
+    return _name_to_obj(result_nodes)
+
+
+def listRelatives(*args, **kwargs):
+    """Wrapper for _listRelatives that accepts short and long argument names.
+
+    This function converts short keyword arguments to their corresponding long
+    names and then calls the internal _listRelatives implementation.
+
+    Args:
+        *args: Positional arguments. The first positional argument must be the
+            DAG node name.
+        **kwargs: Keyword arguments that may include short or long names.
+
+    Returns:
+        list: List of node names matching the criteria.
+    """
+    # Mapping from short argument names to long names.
+    short_to_long = {
+        "ad": "allDescendents",
+        "c": "children",
+        "p": "parent",
+        "fp": "fullPath",
+        "s": "shapes",
+        "ni": "noIntermediate",
+        "t": "type",
+        "typ": "type",
+    }
+    # Convert short names in kwargs to long names.
+    for key in list(kwargs):
+        if key in short_to_long:
+            long_key = short_to_long[key]
+            if long_key not in kwargs:
+                kwargs[long_key] = kwargs.pop(key)
+            else:
+                kwargs.pop(key)
+
+    # Extract dag_path from positional args or kwargs.
+    if args:
+        dag_path = args[0]
+        new_args = (dag_path,)
+    else:
+        dag_path = kwargs.pop("dag_path", None)
+        new_args = (dag_path,)
+    if dag_path is None:
+        raise ValueError(
+            "dag_path must be provided as a positional or keyword argument."
+        )
+
+    # Set default values if not provided.
+    defaults = {
+        "allDescendents": False,
+        "children": False,
+        "parent": False,
+        "fullPath": True,
+        "path": False,
+        "shapes": False,
+        "noIntermediate": False,
+        "type": None,
+    }
+    for key, value in defaults.items():
+        if key not in kwargs:
+            kwargs[key] = value
+
+    return _listRelatives(dag_path, **kwargs)
+
+
 def keyframe(*args, **kwargs):
     args = _obj_to_name(args)
     kwargs = _obj_to_name(kwargs)
@@ -508,6 +755,54 @@ def disconnectAttr(*args, **kwargs):
     else:
         cmds.disconnectAttr(*args, **kwargs)
 
+
+def curve(*args, **kwargs):
+    """
+    Creates a NURBS curve
+
+    """
+    curve_obj = cmds.curve(*args, **kwargs)
+
+    # Get the actual transform name (handles Maya's auto-renaming)
+    transform_name = cmds.ls(curve_obj, long=False)[0]
+    # Find the shapes of the curve
+    shapes = (
+        cmds.listRelatives(transform_name, shapes=True, fullPath=True) or []
+    )
+
+    # Rename shapes based on the transform name
+    if len(shapes) == 1:
+        # Single shape: rename without index
+        cmds.rename(
+            shapes[0], "{}Shape".format(transform_name.replace("|", ""))
+        )
+    else:
+        # Multiple shapes: rename with index
+        for i, shape in enumerate(shapes, start=1):
+            shape_name = "{}Shape{}".format(transform_name, i)
+            cmds.rename(shape, shape_name.replace("|", ""))
+    the_return = _name_to_obj(transform_name)
+    return the_return
+
+
+def _flatten_list(nested_list):
+    """Recursively flattens a nested list structure into a single list."""
+    flat_list = []
+    for item in nested_list:
+        if isinstance(item, (list, tuple)):
+            flat_list.extend(_flatten_list(item))
+        else:
+            flat_list.append(item)
+    return flat_list
+
+
+def select(*args, **kwargs):
+    """Wrapper for cmds.select() that supports nested lists."""
+    args = _flatten_list(args)
+    return _name_to_obj(cmds.select(*args, **kwargs))
+
+
+# set Locals dict
 
 local_dict = locals()
 

@@ -23,7 +23,7 @@ class FolderStructureCreatorUI(MayaQWidgetDockableMixin, QtWidgets.QDialog):
         self.init_ui()
         self.setMinimumWidth(200)
         self.setAcceptDrops(True)
-        self.resize(550, 200)
+        self.resize(400, 150)
         self.connect_signals()
 
     def create_actions(self):
@@ -46,12 +46,16 @@ class FolderStructureCreatorUI(MayaQWidgetDockableMixin, QtWidgets.QDialog):
         self.config_path_btn = widgets.create_button(
             icon="mgear_folder", width=25
         )
+        self.create_btn = QtWidgets.QPushButton("Create Folder Structure")
         config_path_layout = QtWidgets.QHBoxLayout()
         config_path_layout.addWidget(self.config_path_le)
         config_path_layout.addWidget(self.config_path_btn)
 
         config_path_groupbox = QtWidgets.QGroupBox("Configuration Path")
-        config_path_groupbox.setLayout(config_path_layout)
+        config_path_groupbox_layout = QtWidgets.QVBoxLayout()
+        config_path_groupbox_layout.addLayout(config_path_layout)
+        config_path_groupbox_layout.addWidget(self.create_btn)
+        config_path_groupbox.setLayout(config_path_groupbox_layout)
 
         # Main Path UI
         self.path_le = QtWidgets.QLineEdit(self.config.get("path", ""))
@@ -62,7 +66,7 @@ class FolderStructureCreatorUI(MayaQWidgetDockableMixin, QtWidgets.QDialog):
         main_path_groupbox = QtWidgets.QGroupBox("Root Path")
         main_path_groupbox.setLayout(main_path_layout)
 
-        # root folder names
+        # Root folder names
         self.custom_step_name_le = QtWidgets.QLineEdit(
             self.config["custom_step_folder"]
         )
@@ -85,10 +89,7 @@ class FolderStructureCreatorUI(MayaQWidgetDockableMixin, QtWidgets.QDialog):
             ", ".join(self.config.get("target", ["layout", "anim"]))
         )
 
-        # Buttons
-        self.create_btn = QtWidgets.QPushButton("Create Folder Structure")
-
-        # settings layout
+        # Settings layout
         settings_layout = QtWidgets.QVBoxLayout()
         settings_layout.addWidget(QtWidgets.QLabel("Type:"))
         settings_layout.addWidget(self.type_le)
@@ -98,22 +99,28 @@ class FolderStructureCreatorUI(MayaQWidgetDockableMixin, QtWidgets.QDialog):
         settings_layout.addWidget(self.variant_le)
         settings_layout.addWidget(QtWidgets.QLabel("Target:"))
         settings_layout.addWidget(self.target_le)
-        settings_layout.addWidget(self.create_btn)
         settings_groupbox = QtWidgets.QGroupBox("Settings")
         settings_groupbox.setLayout(settings_layout)
+
+        # Collapsible section for "Configuration Creator"
+        self.config_creator_widget = widgets.CollapsibleWidget(
+            "Configuration Creator", expanded=False
+        )
+        self.config_creator_widget.addWidget(main_path_groupbox)
+        self.config_creator_widget.addWidget(folder_names_groupbox)
+        self.config_creator_widget.addWidget(settings_groupbox)
 
         # Vertical expander (spacer)
         vertical_spacer = QtWidgets.QSpacerItem(
             20,
-            40,
+            10,
             QtWidgets.QSizePolicy.Minimum,
             QtWidgets.QSizePolicy.Expanding,
         )
+
         # Layout setup
         self.layout.addWidget(config_path_groupbox)
-        self.layout.addWidget(main_path_groupbox)
-        self.layout.addWidget(folder_names_groupbox)
-        self.layout.addWidget(settings_groupbox)
+        self.layout.addWidget(self.config_creator_widget)
         self.layout.addItem(vertical_spacer)
 
     def connect_signals(self):
@@ -244,20 +251,16 @@ class FolderStructureCreatorUI(MayaQWidgetDockableMixin, QtWidgets.QDialog):
         custom_step_folder_name = self.config["custom_step_folder"]
         data_folder_name = self.config["data_folder"]
         asset_type = self.config["type"]
-        name = self.config["name"]
-        if not name:
-            pm.displayWarning("Please set the name of the asset")
+        names = [n.strip() for n in self.config["name"].split(",")]  # Split names
+        if not names or not any(names):
+            pm.displayWarning("Please set the name(s) of the asset")
             return
         variants = self.config["variant"]
         targets = self.config["target"]
 
         def create_folder(path):
-            # determines sub_folders based on whether data_folder_name is in path
-            sub_dirs = (
-                ["data", "assets"]
-                if data_folder_name in path
-                else ["pre", "post"]
-            )
+            # Determines sub_folders based on whether data_folder_name is in path
+            sub_dirs = ["data", "assets"] if data_folder_name in path else ["pre", "post"]
             for sub_dir in sub_dirs:
                 sub_dir_path = os.path.join(path, sub_dir)
                 if not os.path.exists(sub_dir_path):
@@ -267,38 +270,36 @@ class FolderStructureCreatorUI(MayaQWidgetDockableMixin, QtWidgets.QDialog):
             root_shared = os.path.join(base_path, root_folder, "_shared")
             create_folder(root_shared)
 
-            asset_type_shared = os.path.join(
-                base_path, root_folder, asset_type, "_shared"
-            )
+            asset_type_shared = os.path.join(base_path, root_folder, asset_type, "_shared")
             create_folder(asset_type_shared)
 
-            name_shared = os.path.join(
-                base_path, root_folder, asset_type, name, "_shared"
-            )
-            create_folder(name_shared)
-
-            for variant in variants:
-                variant_shared = os.path.join(
-                    base_path,
-                    root_folder,
-                    asset_type,
-                    name,
-                    variant,
-                    "_shared",
+            for name in names:  # Loop through each name
+                name_shared = os.path.join(
+                    base_path, root_folder, asset_type, name, "_shared"
                 )
-                create_folder(variant_shared)
+                create_folder(name_shared)
 
-                for target in targets:
-
-                    path = os.path.join(
+                for variant in variants:
+                    variant_shared = os.path.join(
                         base_path,
                         root_folder,
                         asset_type,
                         name,
                         variant,
-                        target,
+                        "_shared",
                     )
-                    create_folder(path)
+                    create_folder(variant_shared)
+
+                    for target in targets:
+                        path = os.path.join(
+                            base_path,
+                            root_folder,
+                            asset_type,
+                            name,
+                            variant,
+                            target,
+                        )
+                        create_folder(path)
 
         QtWidgets.QMessageBox.information(
             self,

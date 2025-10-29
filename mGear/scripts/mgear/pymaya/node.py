@@ -10,6 +10,7 @@ from . import exception
 from . import geometry
 from . import util
 from functools import partial
+import math
 
 
 RE_ATTR_INDEX = re.compile("\[([0-9]+)\]")
@@ -33,7 +34,7 @@ def _setTransformation(node, matrix):
     """
 
     # If the matrix is a list of lists, convert it to OpenMaya.MMatrix
-    if isinstance(matrix, list):
+    if isinstance(matrix, (list, tuple)):
         # Ensure it's a 4x4 matrix (list of 4 lists, each with 4 elements)
         if len(matrix) == 4 and all(len(row) == 4 for row in matrix):
             flat_matrix = [elem for row in matrix for elem in row]
@@ -67,12 +68,12 @@ def _getShape(node, **kwargs):
 def _getShapes(node, **kwargs):
     kwargs.pop("shapes", kwargs.pop("s", None))
     kwargs["shapes"] = True
-    return cmd.listRelatives(node, **kwargs)
+    return cmd.listRelatives(node, fullPath=True, **kwargs)
 
 
 def _getParent(node, generations=1):
     if generations == 1:
-        res = cmd.listRelatives(node, p=True)
+        res = cmd.listRelatives(node, fullPath=True, p=True, c=False)
         if res:
             return res[0]
 
@@ -94,6 +95,8 @@ def _getParent(node, generations=1):
 
 def _getChildren(node, **kwargs):
     kwargs["c"] = True
+    if "fullPath" not in kwargs:
+        kwargs["fullPath"] = True
     return cmd.listRelatives(node, **kwargs)
 
 
@@ -283,6 +286,18 @@ class _Node(base.Node):
             other = _Node(other)
         return self.__obj != other.__obj
 
+    def __str__(self):
+        """Return the long name of the node as a string."""
+        return self.longName()
+
+    def __repr__(self):
+        """Return a string representation of the object."""
+        return "<_Node '{}'>".format(self.longName())
+
+    def __unicode__(self):
+        """Return the long name of the node as a unicode string (for Python 2)."""
+        return self.longName()
+
     def object(self):
         return self.__obj
 
@@ -311,6 +326,9 @@ class _Node(base.Node):
     def nodeName(self):
         return self.name()
 
+    def getName(self):
+        return self.name()
+
     def longName(self):
         fdag = super(_Node, self).__getattribute__("_Node__fn_dag")
         if fdag is not None:
@@ -322,7 +340,7 @@ class _Node(base.Node):
         """Return the short name of the node."""
         fdag = super(_Node, self).__getattribute__("_Node__fn_dag")
         if fdag is not None:
-            return fdag.partialPathName()
+            return fdag.partialPathName().split("|")[-1]
         fdg = super(_Node, self).__getattribute__("_Node__fn_dg")
         return fdg.name().split("|")[-1]
 
@@ -335,43 +353,147 @@ class _Node(base.Node):
     def stripNamespace(self):
         return "|".join([x.split(":")[-1] for x in self.name().split("|")])
 
+    def child(self, index=0):
+        """Retrieve a specific child node by index.
+
+        Args:
+            index (int): The index of the child to retrieve. Defaults to 0.
+
+        Returns:
+            _Node: The child node at the specified index.
+
+        Raises:
+            IndexError: If the index is out of range.
+        """
+        children = self.listRelatives(c=True, fullPath=True)
+        if not children or index < 0 or index >= len(children):
+            raise IndexError(f"Child index {index} is out of range.")
+        return children[index]
+
     def attr(self, name, checkShape=True):
+        """
+        Retrieve an attribute from the node.
+
+        This method attempts to resolve an attribute by its name, including support
+        for compound attributes (e.g., "translate.translateX") and array attributes
+        (e.g., "someArray[0]"). It also handles alias attributes and can fall back
+        to checking the shape node if the attribute is not found on the main node.
+
+        Args:
+            name (str): The name of the attribute to retrieve. This can include
+                        compound or array syntax.
+            checkShape (bool, optional): Whether to check the shape node for the
+                                        attribute if it is not found on the main
+                                        node. Defaults to True.
+
+        Returns:
+            Attribute: An `Attribute` wrapper object representing the resolved
+                    attribute.
+
+        Raises:
+            exception.MayaAttributeError: If the attribute does not exist or cannot
+                                        be resolved.
+
+        Behavior:
+            - Checks if the attribute exists in the cache.
+            - Resolves compound attributes by splitting the name.
+            - Handles array attributes by extracting the index.
+            - Attempts to find the attribute plug using the OpenMaya API.
+            - Resolves alias attributes if applicable.
+            - Falls back to checking the shape node if `checkShape` is True.
+            - Uses `cmds.objExists` as a final fallback to confirm the attribute's
+            existence.
+
+        Example:
+            >>> node = _Node("pSphere1")
+            >>> translate_x = node.attr("translateX")
+            >>> print(translate_x)
+        """
+        # Check if the attribute is already cached
         attr_cache = super(_Node, self).__getattribute__("_Node__attrs")
         if name in attr_cache:
             return attr_cache[name]
 
-        p = None
+        # Split the attribute name to handle compound attributes
+        parts = name.split(".")
+        attrname = parts[0]
+        sub_attr = parts[1] if len(parts) > 1 else None
         idx = None
-        attrname = name
-        idre = RE_ATTR_INDEX.search(name)
+
+        # Handle array attributes by extracting the index
+        idre = RE_ATTR_INDEX.search(attrname)
         if idre:
-            attrname = name[: idre.start()]
+            attrname = attrname[: idre.start()]
             idx = int(idre.group(1))
 
+        # Attempt to find the attribute plug using the OpenMaya API
         fn_dg = super(_Node, self).__getattribute__("_Node__fn_dg")
+        p = None
+
         try:
             p = fn_dg.findPlug(attrname, False)
         except Exception:
             if checkShape:
-                get_shape = super(_Node, self).__getattribute__("getShape")
-                shape = get_shape()
-                if shape:
-                    try:
-                        p = shape.dgFn().findPlug(attrname, False)
-                    except:
-                        pass
+                try:
+                    # Check the shape node if the attribute is not found
+                    get_shape = super(_Node, self).__getattribute__("getShape")
+                    shape = get_shape()
+                    p = shape.dgFn().findPlug(attrname, False)
+                except Exception:
+                    pass
 
-            if p is None:
+        # If the plug is still not resolved, confirm existence with cmds
+        if p is None or p.isNull:
+            full_attr_name = f"{self.name()}.{name}"
+            if cmds.objExists(full_attr_name):
+                return attr.Attribute(full_attr_name)
+            raise exception.MayaAttributeError(f"No '{name}' attr found")
+
+        # Handle indexed attributes (arrays)
+        if idx is not None:
+            if p.isArray:
+                try:
+                    p = p.elementByLogicalIndex(idx)
+                except RuntimeError:
+                    raise exception.MayaAttributeError(
+                        f"Index {idx} not found in attribute '{attrname}'"
+                    )
+            else:
                 raise exception.MayaAttributeError(
-                    "No '{}' attr found".format(name)
+                    f"'{attrname}' is not an array attribute"
                 )
 
-        at = attr.Attribute(p)
-        if idx is not None:
-            at = at[idx]
+        # If no sub-attribute, return the resolved plug
+        if not sub_attr:
+            attr_cache[name] = attr.Attribute(p)
+            return attr_cache[name]
 
-        attr_cache[name] = at
-        return at
+        # Ensure the attribute is a compound attribute
+        attr_obj = p.attribute()
+        if not attr_obj.hasFn(OpenMaya.MFn.kCompoundAttribute):
+            raise exception.MayaAttributeError(
+                f"'{attrname}' is not a compound attribute"
+            )
+
+        # Resolve the sub-attribute within the compound attribute
+        fn_attr = OpenMaya.MFnCompoundAttribute(attr_obj)
+        found_child_plug = None
+        for i in range(fn_attr.numChildren()):
+            child_obj = fn_attr.child(i)
+            child_fn_attr = OpenMaya.MFnAttribute(child_obj)
+
+            if child_fn_attr.name == sub_attr:
+                found_child_plug = p.child(i)
+                break
+
+        if found_child_plug is None or found_child_plug.isNull:
+            raise exception.MayaAttributeError(
+                f"No '{sub_attr}' attr found under '{attrname}'"
+            )
+
+        # Cache and return the resolved attribute
+        attr_cache[name] = attr.Attribute(found_child_plug)
+        return attr_cache[name]
 
     def addAttr(self, name, **kwargs):
         kwargs.pop("ln", None)
@@ -391,6 +513,36 @@ class _Node(base.Node):
     def listAttr(self, **kwargs):
         return cmd.listAttr(**kwargs)
 
+    def disconnectAttr(self, attr_name):
+        # Construct the full attribute name
+        full_attr = "{}.{}".format(self.name(), attr_name)
+
+        # Check if the attribute exists
+        if not cmds.objExists(full_attr):
+            raise RuntimeError(
+                "Attribute '{}' does not exist.".format(full_attr)
+            )
+
+        # Get the input connection for the attribute
+        input_connection = cmds.listConnections(
+            full_attr, source=True, destination=False, plugs=True
+        )
+
+        if not input_connection:
+            cmd.displayWarning(
+                "Attribute '{}' does not have an input connection.".format(
+                    full_attr
+                )
+            )
+            return
+
+        # Disconnect the source and destination attributes
+        source_attr = input_connection[0]
+        cmds.disconnectAttr(source_attr, full_attr)
+        # cmd.displayInfo(
+        #     "Disconnected '{}' from '{}'.".format(source_attr, full_attr)
+        # )
+
     # NOTE: encapsulation is neded to avoid lossing the types. Previosly it
     # will incorrelty convert the items to a list of strings.
     def __listConnections(self, **kwargs):
@@ -406,7 +558,11 @@ class _Node(base.Node):
         return connections
 
     def listRelatives(self, **kwargs):
-        return cmd.listRelatives(self, **kwargs)
+        # ensure we use fullpath to avoid name clashing with maya.cmds
+        # this will ensure that return as object and not str if name clashing
+        if "fullPath" not in kwargs:
+            kwargs["fullPath"] = True
+        return cmd.listRelatives(self.name(), **kwargs)
 
     def type(self):
         return self.__fn_dg.typeName
@@ -426,7 +582,7 @@ class _Node(base.Node):
         return self
 
     def rename(self, name):
-        return cmds.rename(self.name(), name)
+        return BindNode(cmds.rename(self.name(), name))
 
     def startswith(self, word):
         return self.name().startswith(word)
@@ -508,6 +664,10 @@ class _NodeTypes(object):
 
         return None
 
+    def getAllRegisteredTypes(self):
+        """Retrieve all registered node types."""
+        return self.__types.copy()
+
     def __getattribute__(self, name):
         try:
             return super(_NodeTypes, self).__getattribute__(name)
@@ -519,6 +679,35 @@ class _NodeTypes(object):
                 return tcls
 
             raise
+
+    # def __getattribute__(self, name):
+    #     """Override __getattribute__ to fetch registered types safely."""
+    #     # Avoid recursion by bypassing custom lookup for special attributes
+    #     if name in ("__dict__", "_NodeTypes__types", "getTypeClass"):
+    #         return super(_NodeTypes, self).__getattribute__(name)
+
+    #     try:
+    #         return super(_NodeTypes, self).__getattribute__(name)
+    #     except AttributeError:
+    #         # Prevent infinite recursion
+    #         if name.startswith("_"):
+    #             raise
+
+    #         try:
+    #             typename = "{}{}".format(name[0].lower(), name[1:])
+    #             tcls = super(_NodeTypes, self).__getattribute__(
+    #                 "getTypeClass"
+    #             )(typename)
+    #             if tcls:
+    #                 return tcls
+    #         except RecursionError:
+    #             raise RuntimeError(
+    #                 "Recursion detected while retrieving attribute: {}".format(
+    #                     name
+    #                 )
+    #             )
+
+    #         raise
 
     def __init__(self):
         super(_NodeTypes, self).__init__()
@@ -550,7 +739,7 @@ class ObjectSet(_Node):
         Returns:
             list: A list of members in the set, or an empty list if no members exist.
         """
-        return cmds.sets(self, q=True) or []
+        return cmd.sets(self, q=True) or []
 
     def union(self, *other_sets):
         """
@@ -581,6 +770,22 @@ class ObjectSet(_Node):
             if other_members:
                 cmds.sets(other_members, addElement=self.name())
 
+    def remove(self, *items):
+        objects_to_remove = []
+
+        # Loop through the provided items
+        for item in items:
+            if isinstance(item, list):
+                # If it's a list, extend the objects to remove
+                objects_to_remove.extend(item)
+            else:
+                # Otherwise, append the single object
+                objects_to_remove.append(item)
+
+        if objects_to_remove:
+            # Add objects to the set using cmds.sets
+            cmds.sets(objects_to_remove, remove=self.name())
+
     def add(self, *items):
         """
         Add one or more objects to the set.
@@ -607,6 +812,10 @@ class ObjectSet(_Node):
             # Add objects to the set using cmds.sets
             cmds.sets(objects_to_add, addElement=self.name())
 
+    def addMembers(self, *items):
+
+        self.add(*items)
+
 
 nt.registerClass("objectSet", cls=ObjectSet)
 
@@ -622,8 +831,13 @@ class NurbsCurve(_Node):
     def findParamFromLength(self, l):
         return self.__fn_curve.findParamFromLength(l)
 
-    def getPointAtParam(self, p):
-        return self.__fn_curve.getPointAtParam(p)
+    def getPointAtParam(self, p, space="local"):
+        mspace = (
+            OpenMaya.MSpace.kObject
+            if space == "local"
+            else OpenMaya.MSpace.kWorld
+        )
+        return self.__fn_curve.getPointAtParam(p, mspace)
 
     def form(self):
         frm = self.__fn_curve.form
@@ -641,14 +855,82 @@ class NurbsCurve(_Node):
     def degree(self):
         return self.__fn_curve.degree
 
+    def numSpans(self):
+        """Calculate and return the number of spans in the NURBS curve."""
+        num_knots = self.__fn_curve.numKnots
+        degree = self.__fn_curve.degree
+        num_spans = num_knots - degree - 1
+
+        # Adjust for periodic curves
+        if self.__fn_curve.form == OpenMaya.MFnNurbsCurve.kPeriodic:
+            num_spans -= 1
+
+        return num_spans
+
     def getKnots(self):
         return [x for x in self.__fn_curve.knots()]
 
     def getCVs(self, space="preTransform"):
         return [
-            datatypes.Point(x)
+            datatypes.Point(x).asVector()
             for x in self.__fn_curve.cvPositions(util.to_mspace(space))
         ]
+
+    def setCV(self, index, position, space="world"):
+        """Set the position of a single CV.
+
+        Args:
+            index (int): The CV index to modify.
+            position (datatypes.Point): The new position of the CV.
+            space (str): The transformation space (default is "world").
+
+        Raises:
+            IndexError: If the CV index is out of range.
+        """
+        num_cvs = self.__fn_curve.numCVs
+        if index < 0 or index >= num_cvs:
+            raise IndexError(
+                "CV index out of range. Expected 0-{}, got {}.".format(
+                    num_cvs - 1, index
+                )
+            )
+
+        # Ensure position is a datatypes.Point
+        if isinstance(position, (list, tuple)):
+            if len(position) != 3:
+                raise TypeError("Position must be a list/tuple of 3 floats.")
+            position = datatypes.Point(*position)
+        elif not isinstance(position, datatypes.Point):
+            raise TypeError(
+                "Position must be a datatypes.Point or [x, y, z] list."
+            )
+
+        mspace = util.to_mspace(space)
+        self.__fn_curve.setCVPosition(index, position, mspace)
+        self.__fn_curve.updateCurve()
+
+    def setCVs(self, cvs, space="preTransform"):
+        """Set the positions of all CVs in the curve.
+
+        Args:
+            cvs (list): A list of `datatypes.Point` objects representing
+                new CV positions.
+            space (str): The transformation space (default is "preTransform").
+
+        Raises:
+            ValueError: If the number of provided CVs does not match
+                the curve's CV count.
+        """
+        num_cvs = self.__fn_curve.numCVs
+        if len(cvs) != num_cvs:
+            raise ValueError(
+                "Incorrect number of CVs. Expected {}, got {}.".format(
+                    num_cvs, len(cvs)
+                )
+            )
+
+        for i, cv in enumerate(cvs):
+            self.setCV(i, cv, space)
 
 
 nt.registerClass("nurbsCurve", cls=NurbsCurve)
@@ -663,6 +945,10 @@ class SkinCluster(_Node):
         kwargs["geometry"] = True
         kwargs["query"] = True
         return cmd.skinCluster(self, **kwargs)
+
+    def addInfluence(self, joint, weight=0):
+        cmds.skinCluster(self.name(), e=True, ai=joint, lw=True, wt=weight)
+        return True
 
     def __apimfn__(self):
         return self.__skn

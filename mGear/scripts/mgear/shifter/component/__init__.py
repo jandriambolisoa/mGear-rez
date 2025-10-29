@@ -473,12 +473,21 @@ class Main(object):
                 # All new jnts are the active by default
                 self.active_jnt = jnt
 
+                use_cns_connection = False
                 if keep_off:
-                    driver = primitive.addTransform(
-                        obj, name=obj.name() + "_cnx_off"
-                    )
-                    transform.matchWorldTransform(jnt, driver)
-                    rot_off = [0, 0, 0]
+                    # if jnt.rotate.get() != (0, 0, 0):
+                    if not all(component == 0 for component in jnt.rotate.get()):
+                        pm.displayInfo(f"Joint {jnt.name()} has non-zero rotations, We will use Constraints to connect: {jnt.rotate.get()}")
+                        use_cns_connection = True
+                    if isinstance(obj, datatypes.Matrix):
+                        driver = None
+                        jnt.setMatrix(obj, worldSpace=True)
+                    else:
+                        driver = primitive.addTransform(
+                            obj, name=obj.name() + "_cnx_off"
+                        )
+                        transform.matchWorldTransform(jnt, driver)
+                        rot_off = [0, 0, 0]
 
                 else:
                     if isinstance(obj, datatypes.Matrix):
@@ -489,7 +498,18 @@ class Main(object):
                         driver = obj
                         rot_off = rot_off
 
-                if driver:
+                if use_cns_connection and self.options["connect_joints"]:
+                    # coonnect jnt to driver using parent contraint and scale
+                    # and mantain offset
+                    pm.parentConstraint(
+                        driver, jnt, maintainOffset=True, weight=1
+                    )
+                    pm.scaleConstraint(
+                        driver, jnt, maintainOffset=True, weight=1
+                    )
+                    cns_m = None
+
+                elif driver:
                     # if segComp:
                     #     # if segment compensation is active we handle the scale
                     #     # outside of the gear matrix contraint
@@ -1167,7 +1187,11 @@ class Main(object):
             dagNode: match transform node
         """
         # create match
-        match = primitive.addTransform(
+        if self.WIP:
+            add_match = primitive.addLocator
+        else:
+            add_match = primitive.addTransform
+        match = add_match(
             parent, self.getName(name), transform.getTransform(ctl)
         )
 
@@ -2331,6 +2355,14 @@ class Main(object):
         self.build_data["Twist"] = []
         self.build_data["Squash"] = []
         self.build_data["Settings"] = self.settings
+        settings_dict = self.guide.get_guide_template_dict()
+        # print("settings_dict>>>>")
+        # print(settings_dict)
+        self.build_data["Settings"]["RGB_fk"] = settings_dict["param_values"]["RGB_fk"]
+        self.build_data["Settings"]["RGB_ik"] = settings_dict["param_values"]["RGB_ik"]
+        # print('self.build_data["Settings"]')
+        # print(self.build_data["Settings"])
+        # print(self.settings)
         self.build_data["relatives"] = store_relative_names(self.relatives)
         self.build_data["jointRelatives"] = self.jointRelatives
         self.build_data["controlRelatives"] = store_relative_names(

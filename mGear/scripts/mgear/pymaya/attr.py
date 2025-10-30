@@ -7,10 +7,10 @@ from . import exception
 
 
 class EnumValue(object):
-    def __init__(self, key, index):
+    def __init__(self, index, key):
         super(EnumValue, self).__init__()
-        self.__key = key
         self.__index = index
+        self.__key = key
 
     @property
     def key(self):
@@ -19,6 +19,14 @@ class EnumValue(object):
     @property
     def index(self):
         return self.__index
+
+    def __str__(self):
+        """Fallback string representation."""
+        return self.key if self.key else str(self.index)
+
+    def __repr__(self):
+        """Developer-friendly representation."""
+        return f"EnumValue(index={self.index}, key='{self.key}')"
 
 
 class Attribute(base.Attr):
@@ -338,3 +346,16 @@ class Attribute(base.Attr):
                 count += 1
 
         return count
+
+    def index(self):
+        """Return the index of a multi-attribute element if present.
+
+        Returns:
+            int or None: The index of the attribute element if present,
+                otherwise None.
+        """
+        attr_name = self.name()
+        match = re.search(r"\[(\d+)\]$", attr_name)
+        if match:
+            return int(match.group(1))
+        return None

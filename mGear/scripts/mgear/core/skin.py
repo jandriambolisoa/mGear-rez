@@ -23,6 +23,7 @@ from mgear.vendor.Qt import QtWidgets
 from mgear.vendor.Qt import QtCore
 from mgear.vendor.Qt import QtGui
 from mgear.core import pyqt
+from mgear.core import utils
 from maya.app.general.mayaMixin import MayaQWidgetDockableMixin
 
 FILE_EXT = ".gSkin"
@@ -137,6 +138,7 @@ def get_mesh_components_from_tag_expression(skinCls, tag="*"):
     return dagPath, components
 
 
+# @utils.timeFunc
 def getGeometryComponents(skinCls):
     """Get the geometry components from skincluster
 
@@ -197,6 +199,9 @@ def collectInfluenceWeights(skinCls, dagPath, components, dataDic):
     numInfluences = get_skin_cluster_fn(skinCls.name()).influenceObjects(
         influencePaths
     )
+    # cast to float to avoid rounding errors when dividing integers?
+    dataDic["vertexCount"] = int(weights.length() / float(numInfluences))
+
     numComponentsPerInfluence = int(weights.length() / numInfluences)
     for ii in range(influencePaths.length()):
         influenceName = influencePaths[ii].partialPathName()
@@ -207,8 +212,7 @@ def collectInfluenceWeights(skinCls, dagPath, components, dataDic):
             for jj in range(numComponentsPerInfluence)
             if weights[jj * numInfluences + ii] != 0.0
         }
-        # cast to float to avoid rounding errors when dividing integers?
-        dataDic["vertexCount"] = int(weights.length() / float(numInfluences))
+
         # cast influenceWithoutNamespace as string otherwise it can end up
         # as DependNodeName(u'jointName') in the data.
         dataDic["weights"][str(influenceWithoutNamespace)] = inf_w
@@ -288,9 +292,9 @@ def exportSkin(filePath=None, objs=None, *args):
             # start by pruning by a tiny amount. Enough to not make  noticeable
             # change to the skin, but it will remove infinitely small weights.
             # Otherwise, compressing will do almost nothing!
-            if isinstance(obj.getShape(), pm.nodetypes.Mesh):
+            # if isinstance(obj.getShape(), pm.nodetypes.Mesh):
                 # TODO: Implement pruning on nurbs. Less straight-forward
-                pm.skinPercent(skinCls, obj, pruneWeights=0.001)
+                # pm.skinPercent(skinCls, obj, pruneWeights=0.0001)
 
             dataDic = {
                 "weights": {},
@@ -330,6 +334,7 @@ def exportSkin(filePath=None, objs=None, *args):
         return True
 
 
+@utils.timeFunc
 def exportSkinPack(packPath=None, objs=None, use_json=False, *args):
     if use_json:
         file_ext = FILE_JSON_EXT
@@ -393,45 +398,57 @@ def exportJsonSkinPack(packPath=None, objs=None, *args):
 ######################################
 
 
+# @utils.timeFunc
 def setInfluenceWeights(skinCls, dagPath, components, dataDic, compressed):
+    """Sets influence weights for a given skin cluster.
+
+    Args:
+        skinCls (PyNode): The skin cluster node.
+        dagPath (MDagPath): The DAG path of the mesh.
+        components (MObject): The component selection (e.g., vertices).
+        dataDic (dict): A dictionary containing influence weights.
+        compressed (bool): Whether to use compressed weight format.
+    """
     unusedImports = []
     weights = getCurrentWeights(skinCls, dagPath, components)
+
     influencePaths = OpenMaya.MDagPathArray()
-    numInfluences = get_skin_cluster_fn(skinCls.name()).influenceObjects(
-        influencePaths
-    )
+    skinFn = get_skin_cluster_fn(skinCls.name())  # Cache function call
+    numInfluences = skinFn.influenceObjects(influencePaths)
+
     numComponentsPerInfluence = int(weights.length() / numInfluences)
 
+    # Precompute influence names (Avoiding PyMEL)
+    influenceMap = {
+        OpenMaya.MFnDependencyNode(influencePaths[ii].node()).name(): ii
+        for ii in range(influencePaths.length())
+    }
+
     for importedInfluence, wtValues in dataDic["weights"].items():
-        for ii in range(influencePaths.length()):
-            influenceName = influencePaths[ii].partialPathName()
-            nnspace = pm.PyNode(influenceName).stripNamespace()
-            influenceWithoutNamespace = nnspace
-            if influenceWithoutNamespace == importedInfluence:
-                if compressed:
-                    for jj in range(numComponentsPerInfluence):
-                        # json keys can't be integers. The vtx number key
-                        # is unicode. example: vtx[35] would be: u"35": 0.6974,
-                        # But the binary format is still an int, so check both.
-                        # if the key doesn't exist, set it to 0.0
-                        wt = wtValues.get(jj) or wtValues.get(str(jj)) or 0.0
-                        weights.set(wt, jj * numInfluences + ii)
-                else:
-                    for jj in range(numComponentsPerInfluence):
-                        wt = wtValues[jj]
-                        weights.set(wt, jj * numInfluences + ii)
-                    break
+        influenceIndex = influenceMap.get(importedInfluence)
+        if influenceIndex is not None:
+            if compressed:
+                for jj in range(numComponentsPerInfluence):
+                    wt = wtValues.get(jj, wtValues.get(str(jj), 0.0))
+
+                    weights.set(wt, jj * numInfluences + influenceIndex)
+            else:
+                for jj, wt in enumerate(wtValues):
+                    weights.set(wt, jj * numInfluences + influenceIndex)
         else:
             unusedImports.append(importedInfluence)
 
-    influenceIndices = OpenMaya.MIntArray(numInfluences)
+    # influenceIndices assignment
+    influenceIndices = OpenMaya.MIntArray()
+    influenceIndices.setLength(numInfluences)
     for ii in range(numInfluences):
-        influenceIndices.set(ii, ii)
-    get_skin_cluster_fn(skinCls.name()).setWeights(
-        dagPath, components, influenceIndices, weights, False
-    )
+        influenceIndices[ii] = ii  # Direct assignment is faster
+
+    # Apply the weights
+    skinFn.setWeights(dagPath, components, influenceIndices, weights, False)
 
 
+# @utils.timeFunc
 def setBlendWeights(skinCls, dagPath, components, dataDic, compressed):
     if compressed:
         # The compressed format skips 0.0 weights. If the key is empty,
@@ -453,6 +470,7 @@ def setBlendWeights(skinCls, dagPath, components, dataDic, compressed):
     )
 
 
+# @utils.timeFunc
 def setData(skinCls, dataDic, compressed):
     dagPath, components = getGeometryComponents(skinCls)
     setInfluenceWeights(skinCls, dagPath, components, dataDic, compressed)
@@ -498,6 +516,7 @@ def getObjsFromSkinFile(filePath=None, *args):
             print(x)
 
 
+# @utils.timeFunc
 def importSkin(filePath=None, *args):
 
     if not filePath:
@@ -548,7 +567,8 @@ def importSkin(filePath=None, *args):
                     # if nurbs, count the cvs instead of the vertices.
                     meshVertices = sum([len(shape.cv) for shape in objShapes])
                 elif isinstance(objNode.getShape(), pm.nodetypes.NurbsCurve):
-                    meshVertices = sum([len(shape.cv) for shape in objShapes])
+                    # meshVertices = sum([len(shape.cv) for shape in objShapes])
+                    meshVertices = sum(1 for _ in objShapes[0].cv)
                 else:
                     # TODO: Implement other skinnable objs like lattices.
                     meshVertices = 0
@@ -605,6 +625,7 @@ def importSkin(filePath=None, *args):
             pm.displayWarning(warningMsg.format(objName))
 
 
+@utils.timeFunc
 def importSkinPack(filePath=None, *args):
     if not filePath:
         filePath = pm.fileDialog2(
@@ -627,6 +648,7 @@ def importSkinPack(filePath=None, *args):
 ######################################
 
 
+@utils.timeFunc
 def skinCopy(sourceMesh=None, targetMesh=None, *args, **kwargs):
     if not sourceMesh or not targetMesh:
         if len(pm.selected()) >= 2:

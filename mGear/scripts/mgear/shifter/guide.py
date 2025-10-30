@@ -568,8 +568,13 @@ class Rig(Main):
                         names = naming.get_component_and_relative_name(
                             compParent.name(long=None)
                         )
+
                         pName = names[0]
                         pLocal = names[1]
+                        # Handle name clashing when parsing the guide
+                        # to determine the parent component
+                        if "|" in pName:
+                            pName = pName.split("|")[-1]
                         pComp = self.components[pName]
                         self.components[name].parentComponent = pComp
                         self.components[name].parentLocalName = pLocal
@@ -636,6 +641,9 @@ class Rig(Main):
                 self.components[comp].parentComponent = pComp
                 p_local_name = c_dict["parent_localName"]
                 self.components[comp].parentLocalName = p_local_name
+
+        # More option values
+        self.addOptionsValues()
 
     def get_guide_template_dict(self, meta=None):
         """Get the guide temaplate configuration dictionary
@@ -807,7 +815,7 @@ class Rig(Main):
                 mgear.sev_error,
             )
             return
-        if parent is None:
+        if not parent:
             self.initialHierarchy()
             parent = self.model
         else:
@@ -936,7 +944,7 @@ class Rig(Main):
                             comp_guide.parentLocalName
                         )
                     )
-                except pm.MayaNodeError:
+                except RuntimeError:
                     # if we have a name clashing in the scene, it will try for
                     # find the parent by crawling the hierarchy. This will take
                     # longer time.
@@ -1374,6 +1382,16 @@ class HelperSlots(object):
 
         return fullpath
 
+    @classmethod
+    def _editFile(cls, fullpath):
+
+        if sys.platform.startswith("darwin"):
+            subprocess.call(("open", fullpath))
+        elif os.name == "nt":
+            os.startfile(fullpath)
+        elif os.name == "posix":
+            subprocess.call(("xdg-open", fullpath))
+
     def editFile(self, widgetList):
         for cs in widgetList.selectedItems():
             try:
@@ -1381,12 +1399,7 @@ class HelperSlots(object):
                 fullpath = self.get_cs_file_fullpath(cs_data)
 
                 if fullpath:
-                    if sys.platform.startswith("darwin"):
-                        subprocess.call(("open", fullpath))
-                    elif os.name == "nt":
-                        os.startfile(fullpath)
-                    elif os.name == "posix":
-                        subprocess.call(("xdg-open", fullpath))
+                    self._editFile(fullpath)
                 else:
                     pm.displayWarning("Please select one item from the list")
             except Exception:
@@ -1432,7 +1445,7 @@ class HelperSlots(object):
         return os.path.split(scan_dir)[1]
 
     @classmethod
-    def get_steps_dict(self, itemsList):
+    def get_steps_dict(cls, itemsList):
         stepsDict = {}
         stepsDict["itemsList"] = itemsList
         for item in itemsList:
@@ -1444,7 +1457,7 @@ class HelperSlots(object):
         return stepsDict
 
     @classmethod
-    def runStep(self, stepPath, customStepDic):
+    def runStep(cls, stepPath, customStepDic):
         try:
             with pm.UndoChunk():
                 pm.displayInfo("EXEC: Executing custom step: %s" % stepPath)
@@ -1464,7 +1477,7 @@ class HelperSlots(object):
 
                 customStep = imp.load_source(fileName, runPath)
                 if hasattr(customStep, "CustomShifterStep"):
-                    argspec = inspect.getargspec(
+                    argspec = inspect.getfullargspec(
                         customStep.CustomShifterStep.__init__
                     )
                     if "stored_dict" in argspec.args:
@@ -1500,18 +1513,21 @@ class HelperSlots(object):
                 + traceback.format_exc(),
                 "Continue",
                 "Stop Build",
+                "Edit",
                 "Try Again!",
             )
             if cont == "Stop Build":
                 # stop Build
                 return True
+            elif cont == "Edit":
+                cls._editFile(stepPath)
             elif cont == "Try Again!":
                 try:  # just in case there is nothing to undo
                     pm.undo()
                 except Exception:
                     pass
                 pm.displayInfo("Trying again! : {}".format(stepPath))
-                inception = self.runStep(stepPath, customStepDic)
+                inception = cls.runStep(stepPath, customStepDic)
                 if inception:  # stops build from the recursion loop.
                     return True
             else:
@@ -1737,12 +1753,13 @@ class GuideSettings(MayaQWidgetDockableMixin, GuideMainSettings):
             widget.setFixedSize(pyqt.dpi_scale(30), pyqt.dpi_scale(20))
 
         self.populateCheck(tap.useRGB_checkBox, "Use_RGB_Color")
+
         self.toggleRgbIndexWidgets(
             tap.useRGB_checkBox,
             (w for i in index_widgets for w in i[:2]),
             (w for i in rgb_widgets for w in i[:2]),
             "Use_RGB_Color",
-            tap.useRGB_checkBox.checkState(),
+            tap.useRGB_checkBox.isChecked(),
         )
 
         # pupulate custom steps sttings

@@ -1,6 +1,6 @@
 name = "mGear"
 
-version = "5.0.0-beta.b59ea6c9eadd65ec1717b25ff2b20e4e025e39c6" # beta from https://github.com/mgear-dev/mgear4/tree/mGear5 06/01/2025
+version = "5.1.0"
 
 authors = [
     "Jeremie Passerin",
@@ -18,7 +18,7 @@ requires = [
     "python-3+"
 ]
 
-variants = [["maya-2025"]]
+variants = [["maya-2026"]]
 
 uuid = "mGear-Dev.mGear"
 

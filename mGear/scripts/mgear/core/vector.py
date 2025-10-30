@@ -1,10 +1,11 @@
 """Functions to work with vectors"""
 
 import math
-
+import maya.cmds as cmds
 import maya.OpenMaya as OpenMaya
 
 from mgear.pymaya import datatypes
+from mgear.core import utils
 
 
 #############################################
@@ -26,6 +27,7 @@ def getDistance(v0, v1):
     return v.length()
 
 
+@utils.ensure_pynode
 def getDistance2(obj0, obj1):
     """Get the distance between 2 objects.
 
@@ -43,6 +45,19 @@ def getDistance2(obj0, obj1):
     v = v1 - v0
 
     return v.length()
+
+
+def get_mvector(obj):
+    """Get MVector position of an object in world space.
+
+    Args:
+        obj (str): Object name.
+
+    Returns:
+        OpenMaya.MVector: Position in world space.
+    """
+    pos = cmds.xform(obj, q=True, ws=True, t=True)
+    return OpenMaya.MVector(pos[0], pos[1], pos[2])
 
 
 def linearlyInterpolate(v0, v1, blend=.5):
@@ -81,8 +96,13 @@ def getPlaneNormal(v0, v1, v2):
     vector0.normalize()
     vector1.normalize()
 
-    normal = vector1 ^ vector0
-    normal.normalize()
+    if vector0.isParallel(vector1):
+        # if vectors are parallel, we use an arbitrary up vector to resolve the plane.
+        # TODO: add an optional parameter to this function so joints will be aligned from the given guide axis instead of arbitrary vector.
+        normal = vector0 ^ datatypes.Vector(0, 0, -1)
+    else:
+        normal = vector1 ^ vector0
+        normal.normalize()
 
     return normal
 
@@ -175,7 +195,7 @@ def rotateAlongAxis(v, axis, a):
 
 def calculatePoleVector(p1, p2, p3, poleDistance=1, time=1):
     """
-    This function takes 3 PyMEL PyNodes as inputs.
+    This function takes 3  PyNodes as inputs.
     Creates a pole vector position at a "nice" distance away from a triangle
     of positions.
     Normalizes the bone lengths relative to the knee to calculate straight
@@ -216,6 +236,38 @@ def calculatePoleVector(p1, p2, p3, poleDistance=1, time=1):
     pole_vector = (mid_pointer.normal() * distance) + vec2
 
     return pole_vector
+
+
+def subtract_3Dvectors_list(vec_a, vec_b):
+    """Subtract two 3D vectors represented as lists.
+
+    Args:
+        vec_a (list): First vector [x, y, z].
+        vec_b (list): Second vector [x, y, z].
+
+    Returns:
+        list: Resulting vector after subtraction.
+    """
+    if len(vec_a) != 3 or len(vec_b) != 3:
+        raise ValueError("Both vectors must have 3 elements.")
+
+    return [a - b for a, b in zip(vec_a, vec_b)]
+
+
+def add_3Dvectors_list(vec_a, vec_b):
+    """Add two 3D vectors represented as lists.
+
+    Args:
+        vec_a (list): First vector [x, y, z].
+        vec_b (list): Second vector [x, y, z].
+
+    Returns:
+        list: Resulting vector after addition.
+    """
+    if len(vec_a) != 3 or len(vec_b) != 3:
+        raise ValueError("Both vectors must have 3 elements.")
+
+    return [a + b for a, b in zip(vec_a, vec_b)]
 
 
 ##########################################################
